@@ -2,50 +2,63 @@ name: Check PR Structure
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
+  push:
+    branches: [main]
 
 jobs:
   validate-structure:
+    name: validate-structure
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Check file paths and surname consistency
+      - name: Get changed files
+        id: files
         run: |
-          FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
-
-          if [ -z "$FILES" ]; then
-            echo "Нет измененных файлов. Проверка пройдена."
-            exit 0
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only -z ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} > files.txt
+          else
+            git diff --name-only -z HEAD~1 HEAD > files.txt
           fi
 
+      - name: Validate structure
+        run: |
           SURNAMES=()
 
-          while IFS= read -r file; do
+          while IFS= read -r -d '' file; do
+            echo "Файл: $file"
+
+            if [[ $file == .github/* ]]; then
+              echo "Пропуск служебного файла: $file"
+              continue
+            fi
+
             if ! [[ $file =~ ^sem[0-9]+/[^/]+/[^/]+/ ]]; then
               echo "ОШИБКА: Файл '$file' не соответствует структуре sem№/subject/surname/"
-              echo "   Файлы должны лежать только внутри папок студентов."
               exit 1
             fi
 
-            surname=$(echo $file | cut -d'/' -f3)
+            IFS='/' read -r sem subject surname rest <<< "$file"
             SURNAMES+=("$surname")
-            
-            echo "   Файл: $file -> Фамилия: $surname"
-          done <<< "$FILES"
+
+          done < files.txt
+
+          if [ ${#SURNAMES[@]} -eq 0 ]; then
+            echo "Нет файлов для проверки"
+            exit 0
+          fi
 
           UNIQUE_SURNAMES=($(printf "%s\n" "${SURNAMES[@]}" | sort -u))
-          UNIQUE_COUNT=${#UNIQUE_SURNAMES[@]}
 
-          # 4. Проверка: фамилия должна быть только одна
-          if [ $UNIQUE_COUNT -ne 1 ]; then
+          if [ ${#UNIQUE_SURNAMES[@]} -ne 1 ]; then
             echo "ОШИБКА: PR затрагивает файлы разных студентов!"
-            echo "   Нельзя менять файлы в папках: ${UNIQUE_SURNAMES[*]}"
+            echo "Найдены фамилии: ${UNIQUE_SURNAMES[*]}"
             exit 1
           fi
 
-          echo "Проверка пройдена. Все файлы принадлежат студенту: ${UNIQUE_SURNAMES[0]}"
+          echo "OK: ${UNIQUE_SURNAMES[0]}"
